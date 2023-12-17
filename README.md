@@ -1,138 +1,46 @@
-выключаем auto commit:  
-``` sql
-postgres=# \set AUTOCOMMIT OFF
-postgres=# \echo :AUTOCOMMIT
-OFF
-```
-создаем и наполняем таблицу:  
-``` sql
-create table persons(id serial, first_name text, second_name text);   
-insert into persons(first_name, second_name) values('ivan', 'ivanov');  
-insert into persons(first_name, second_name) values('petr', 'petrov');  
-commit;
-```
-``` sql
-postgres=# select * from persons;
- id | first_name | second_name 
-----+------------+-------------
-  1 | ivan       | ivanov
-  2 | petr       | petrov
-(2 rows)
+<b>создать ВМ с Ubuntu 20.04/22.04 или развернуть докер любым удобным способом</b>  
+![1](https://github.com/sunbleaks/postgresql/assets/144436024/f71d6e7d-5b31-4975-863d-2efe53100255)
+
+
+<b>поставить на нем Docker Engine</b>  
+![2](https://github.com/sunbleaks/postgresql/assets/144436024/22d45bf3-a33f-4d7b-a38f-528e510dadcd)
+
+
+<b>сделать каталог /var/lib/postgres</b>  
+![3](https://github.com/sunbleaks/postgresql/assets/144436024/fd14d611-eebf-47ac-91eb-c69a1b32cca9)
+
+
+<b>развернуть контейнер с PostgreSQL 15 смонтировав в него /var/lib/postgresql</b>  
+``` text
+sudo docker network create pg-net  
+sudo docker run --name pg-server --network pg-net -e POSTGRES_PASSWORD=postgres -d -p 5432:5432 -v /var/lib/postgres:/var/lib/postgresql/data postgres:15
 ```
 
-проверяем текущий уровень изоляции:
-``` sql
-postgres=# show transaction isolation level;
- transaction_isolation 
------------------------
- read committed
-(1 row)
-```
 
-начинаем новую транзакцию в обоих сессиях с дефолтным (не меняя) уровнем изоляции  
-в первой сессии добавляем новую запись 
-``` sql
-insert into persons(first_name, second_name) values('sergey', 'sergeev');
+<b>развернуть контейнер с клиентом postgres  
+подключится из контейнера с клиентом к контейнеру с сервером и сделать таблицу с парой строк</b>  
+``` text
+sudo docker network create pg-net  
+sudo docker run --name pg-server --network pg-net -e POSTGRES_PASSWORD=postgres -d -p 5432:5432 -v /var/lib/postgres:/var/lib/postgresql/data postgres:15  
+sudo docker run -it --rm --network pg-net --name pg-client postgres:15 psql -h pg-server -U postgres  
+create database otus11111;  
+\c otus11111  
+CREATE TABLE test (i serial, amount int);  
+INSERT INTO test(amount) VALUES (100);  
+INSERT INTO test(amount) VALUES (500);  
 ```
-во второй сессии
-``` sql
-select * from persons;
-```
+![4](https://github.com/sunbleaks/postgresql/assets/144436024/3fcf6531-1e1f-4a3d-a6bf-03566c518869)
 
-результат:
-``` sql
-postgres=# select * from persons;
- id | first_name | second_name 
-----+------------+-------------
-  1 | ivan       | ivanov
-  2 | petr       | petrov
-(2 rows)
-```
-<b>новая запись не отображается, т.к. установлен дефолтный уровень изоляции read committed и отключен автокомит  
-(вставка первой транзакцией не зафиксирована)</b>    
-фиксируем первую транзакцию 
-``` sql
-commit;
-```
-еще раз проверяем во второй транзакции
-``` sql
-select * from persons;
-```
 
-результат:
-``` sql
-postgres=*# select * from persons;
- id | first_name | second_name 
-----+------------+-------------
-  1 | ivan       | ivanov
-  2 | petr       | petrov
-  4 | sergey     | sergeev
-(3 rows)
-```
-<b>новая запись отображается по причине того, что в первой транзакции был commit - данные зафиксированы</b>    
-фиксируем вторую транзакцию
-``` sql
-commit;
-```
-устанавливаем в сессиях уровень изоляции транзакций repeatable read 
-``` sql
-postgres=# set transaction isolation level repeatable read;
-SET
-postgres=*# show transaction isolation level;
- transaction_isolation 
------------------------
- repeatable read
-(1 row)
-```
-в первой сессии добавляем новую запись 
-``` sql
-postgres=*# insert into persons(first_name, second_name) values('sveta', 'svetova');
-INSERT 0 1
-```
+<b>подключится к контейнеру с сервером с ноутбука/компьютера извне инстансов GCP/ЯО/места установки докера
+(пробовал подключиться из другого инстанса ВМ)
+</b>
+![5](https://github.com/sunbleaks/postgresql/assets/144436024/30b03613-a259-48ec-a2da-2345d3c9345c)
 
-во второй сессии выполняем
-``` sql
-postgres=*# select * from persons;
- id | first_name | second_name 
-----+------------+-------------
-  1 | ivan       | ivanov
-  2 | petr       | petrov
-  4 | sergey     | sergeev
-(3 rows)
-```
-<b>вставленные данные не отображаются, т.к. в первой сессии не было фиксации</b>  
-фиксируем вставку в первой сессии
-``` sql
-commit;
-```
 
-во второй сессии повторно выполняем запрос
-``` sql
-postgres=*# select * from persons;
- id | first_name | second_name 
-----+------------+-------------
-  1 | ivan       | ivanov
-  2 | petr       | petrov
-  4 | sergey     | sergeev
-(3 rows)
-```
-<b>вставленные данные не отображаются, даже при фиксации транзакции в первой сессии.  
-вторая транзакция видит данные (снимок данных) на момент своего начала  
-и не ввидит остальные завершенные изменения, сделанные в других сессиях в этот момент (фантомное чтение).  
-неповторяющее чтение так же не работает - сколько бы не читали данные - реезульт будет тот же.
-</b>  
+<b>удалить контейнер с сервером  
+создать его заново  
+подключится снова из контейнера с клиентом к контейнеру с сервером  
+проверить, что данные остались на месте</b>  
 
-<b>фиксируем транзакцию во второй сессии и видим изменения.</b>
-``` sql
-postgres=*# commit;
-COMMIT
-postgres=# select * from persons;
- id | first_name | second_name 
-----+------------+-------------
-  1 | ivan       | ivanov
-  2 | petr       | petrov
-  4 | sergey     | sergeev
-  5 | sveta      | svetova
-(4 rows)
-```
-
+проверил, данные после удаления остались на хост машине, и после запуска контейнера с опцией -v стали доступными из контейнера  
