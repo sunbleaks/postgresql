@@ -1,46 +1,32 @@
-<b>создать ВМ с Ubuntu 20.04/22.04 или развернуть докер любым удобным способом</b>  
-![1](https://github.com/sunbleaks/postgresql/assets/144436024/f71d6e7d-5b31-4975-863d-2efe53100255)
-
-
-<b>поставить на нем Docker Engine</b>  
-![2](https://github.com/sunbleaks/postgresql/assets/144436024/22d45bf3-a33f-4d7b-a38f-528e510dadcd)
-
-
-<b>сделать каталог /var/lib/postgres</b>  
-![3](https://github.com/sunbleaks/postgresql/assets/144436024/fd14d611-eebf-47ac-91eb-c69a1b32cca9)
-
-
-<b>развернуть контейнер с PostgreSQL 15 смонтировав в него /var/lib/postgresql</b>  
+<b>установил ВМ с Ubuntu 22.04</b>  
+![1](https://github.com/sunbleaks/postgresql/assets/144436024/f71d6e7d-5b31-4975-863d-2efe53100255)  
+  
+<b>установил PostgreSQL 15 и создал таблицу с данными</b>  
+![Снимок экрана от 2024-01-14 18-10-48](https://github.com/sunbleaks/postgresql/assets/144436024/5a8157b1-0f66-4ab3-97bf-4ba00cbe80bc)  
+  
+<b>создал vhd на 10 GB и подключил к VM</b>  
+![Снимок экрана от 2024-01-14 18-59-25](https://github.com/sunbleaks/postgresql/assets/144436024/d84d00d9-0003-410c-9cc1-22d1126e53c2)  
+  
+<b>разметка, выбор файловой системы и монтирование по инструкции  
+https://www.digitalocean.com/community/tutorials/how-to-partition-and-format-storage-devices-in-linux#step-5-mount-the-new-filesystem</b>
+![Снимок экрана от 2024-01-14 19-03-37](https://github.com/sunbleaks/postgresql/assets/144436024/89f29879-4409-4611-af65-10f56897982e)  
+  
+<b>после перезагрузки системы, диск остается примонтированным</b>  
+![Снимок экрана от 2024-01-14 19-24-52](https://github.com/sunbleaks/postgresql/assets/144436024/5f754111-0a8d-4dd8-a9de-3ad830a3961d)  
+  
+<b>выполнил команду mv /var/lib/postgresql/15 /mnt/data  
+и попытался стартануть кластер, получил ошибку</b>    
 ``` text
-sudo docker network create pg-net  
-sudo docker run --name pg-server --network pg-net -e POSTGRES_PASSWORD=postgres -d -p 5432:5432 -v /var/lib/postgres:/var/lib/postgresql/data postgres:15
-```
-
-
-<b>развернуть контейнер с клиентом postgres  
-подключится из контейнера с клиентом к контейнеру с сервером и сделать таблицу с парой строк</b>  
+user@postgres1:~$ sudo -u postgres pg_ctlcluster 15 main start  
+Error: /var/lib/postgresql/15/main is not accessible or does not exist</b>    
+```  
+  
+<b>для исправления ошибки, необходимо в файле /etc/postgresql/15/main/postgresql.conf  
+указать новый каталог, где будут храниться данные</b>      
 ``` text
-sudo docker network create pg-net  
-sudo docker run --name pg-server --network pg-net -e POSTGRES_PASSWORD=postgres -d -p 5432:5432 -v /var/lib/postgres:/var/lib/postgresql/data postgres:15  
-sudo docker run -it --rm --network pg-net --name pg-client postgres:15 psql -h pg-server -U postgres  
-create database otus11111;  
-\c otus11111  
-CREATE TABLE test (i serial, amount int);  
-INSERT INTO test(amount) VALUES (100);  
-INSERT INTO test(amount) VALUES (500);  
+#data_directory = '/var/lib/postgresql/15/main'         # use data in another directory
+data_directory = '/mnt/data/15/main'
 ```
-![4](https://github.com/sunbleaks/postgresql/assets/144436024/3fcf6531-1e1f-4a3d-a6bf-03566c518869)
-
-
-<b>подключится к контейнеру с сервером с ноутбука/компьютера извне инстансов GCP/ЯО/места установки докера
-(пробовал подключиться из другого инстанса ВМ)
-</b>
-![5](https://github.com/sunbleaks/postgresql/assets/144436024/30b03613-a259-48ec-a2da-2345d3c9345c)
-
-
-<b>удалить контейнер с сервером  
-создать его заново  
-подключится снова из контейнера с клиентом к контейнеру с сервером  
-проверить, что данные остались на месте</b>  
-
-проверил, данные после удаления остались на хост машине, и после запуска контейнера с опцией -v стали доступными из контейнера  
+![Снимок экрана от 2024-01-15 09-27-34](https://github.com/sunbleaks/postgresql/assets/144436024/984b3cd1-43f3-41b5-a107-6f0563ed7291)  
+  
+<b>в psql проверил наличие созднанной таблицы с данными вначале</b>      
