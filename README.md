@@ -1,204 +1,213 @@
-Создать инстанс ВМ с 2 ядрами и 4 Гб ОЗУ и SSD 10GB  
+Настройте выполнение контрольной точки раз в 30 секунд.
 ``` text
-user@postgres2:~$ cat /proc/cpuinfo | grep 'cpu cores'
-cpu cores	: 2
+alter system set checkpoint_timeout = '30s';
 
-user@postgres2:~$ cat /proc/meminfo | head -n 1
-MemTotal:     4005976 kB
-
-user@postgres2:~$ lsblk
-NAME MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
-sda    8:0    0   10G  0 disk
+user@postgres1:~$ sudo pg_ctlcluster 15 main restart
+[sudo] password for user: 
+user@postgres1:~$
 ```
-Установить PostgreSQL 15 с дефолтными настройками
+10 минут c помощью утилиты pgbench подавайте нагрузку.
 ``` text
+Создаем БД для тестирования и инициализируем таблицами
+create database benchmark;
+user@postgres1:~$ sudo -u postgres pgbench -i benchmark
+
+Запоминаем текущую позицию lsn
+select pg_current_wal_lsn();     -- 0/21718A20
+
+Запускаем тест
+user@postgres1:~$ sudo -u postgres pgbench -c8 -P 6 -T 600 -U postgres benchmark
+pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
+starting vacuum...end.
+progress: 6.0 s, 136.7 tps, lat 57.983 ms stddev 15.643, 0 failed
+progress: 12.0 s, 135.3 tps, lat 59.214 ms stddev 16.513, 0 failed
+........
+........
+progress: 594.0 s, 151.2 tps, lat 52.943 ms stddev 11.395, 0 failed
+progress: 600.0 s, 154.2 tps, lat 51.847 ms stddev 12.693, 0 failed
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 8
+number of threads: 1
+maximum number of tries: 1
+duration: 600 s
+number of transactions actually processed: 89200
+number of failed transactions: 0 (0.000%)
+latency average = 53.812 ms
+latency stddev = 13.163 ms
+initial connection time = 13.959 ms
+tps = 148.655089 (without initial connection time)
+```  
+Измерьте, какой объем журнальных файлов был сгенерирован за это время. Оцените, какой объем приходится в среднем на одну контрольную точку.
+``` text
+select pg_current_wal_lsn();    -- 0/345A81C8
+select '0/345A81C8'::pg_lsn - '0/21718A20'::pg_lsn as bytes;
+
+Объем журнальных файлов:     
+317 257 640 bytes (302 MB)
+
+Примерный объем на одну контрольную точку
+317 257 640 / (600/30) = 15 862 882 bytes (15,13 MB)   
+```  
+Проверьте данные статистики: все ли контрольные точки выполнялись точно по расписанию. Почему так произошло?
+``` text
+user@postgres1:~$ cat /var/log/postgresql/postgresql-15-main.log | grep 'checkpoint starting'
+
+2024-01-17 17:28:20.914 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:28:50.450 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:29:20.936 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:29:50.605 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:30:20.767 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:30:50.874 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:31:20.572 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:31:50.268 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:32:20.760 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:32:50.864 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:33:20.972 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:33:50.469 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:34:20.368 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:34:50.106 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:35:20.679 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:35:50.011 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:36:20.006 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:36:50.099 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:37:20.866 UTC [3898] LOG:  checkpoint starting: time
+2024-01-17 17:37:50.678 UTC [3898] LOG:  checkpoint starting: time
+
+контрольная точка срабатывала, с интервалом чуть больше чем 30 секунд, 
+чаще срабатывание происходит, если достигается обьем max_wal_size
+
+select * from pg_stat_bgwriter;
+
+Name                 |Value                        |
+---------------------+-----------------------------+
+checkpoints_timed    |960                          |
+checkpoints_req      |19                           |
+checkpoint_write_time|1514859.0                    |
+checkpoint_sync_time |8945.0                       |
+buffers_checkpoint   |25572                        |
+buffers_clean        |113238                       |
+maxwritten_clean     |71                           |
+buffers_backend      |93049                        |
+buffers_backend_fsync|0                            |
+buffers_alloc        |211821                       |
+stats_reset          |2024-01-14 22:33:52.707 +0200|
+
+статистика не сбрасывалась, но видно общее отношение в 2%
+
+checkpoints_timed — по расписанию (по достижению checkpoint_timeout)
+checkpoints_req   — по требованию (в том числе по достижению max_wal_size)
+```  
+
+Сравните tps в синхронном/асинхронном режиме утилитой pgbench. Объясните полученный результат.
+``` text
+wal_writer_delay|
+----------------+
+200ms           |
+
+synchronous_commit|
+------------------+
+off               |
+
+user@postgres1:~$ sudo -u postgres pgbench -c8 -P 6 -T 600 -U postgres benchmark
+pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
+starting vacuum...end.
+progress: 6.0 s, 4070.3 tps, lat 1.961 ms stddev 1.130, 0 failed
+progress: 12.0 s, 4026.8 tps, lat 1.986 ms stddev 1.159, 0 failed
+progress: 18.0 s, 3853.2 tps, lat 2.076 ms stddev 1.096, 0 failed
+progress: 24.0 s, 3718.5 tps, lat 2.151 ms stddev 1.685, 0 failed
+progress: 30.0 s, 3628.7 tps, lat 2.204 ms stddev 2.896, 0 failed
+progress: 36.0 s, 3849.0 tps, lat 2.078 ms stddev 1.157, 0 failed
+progress: 42.0 s, 4002.1 tps, lat 1.998 ms stddev 1.392, 0 failed
+.........
+.........
+progress: 582.0 s, 3476.7 tps, lat 2.301 ms stddev 1.268, 0 failed
+progress: 588.0 s, 3495.0 tps, lat 2.289 ms stddev 1.112, 0 failed
+progress: 594.0 s, 3692.1 tps, lat 2.166 ms stddev 1.313, 0 failed
+progress: 600.0 s, 3669.7 tps, lat 2.180 ms stddev 2.120, 0 failed
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 8
+number of threads: 1
+maximum number of tries: 1
+duration: 600 s
+number of transactions actually processed: 2212476
+number of failed transactions: 0 (0.000%)
+latency average = 2.169 ms
+latency stddev = 1.571 ms
+initial connection time = 11.572 ms
+tps = 3687.490391 (without initial connection time)
+
+Tранзакций в секунду (tps) на порядок выше. 
+Связанно с отсутствием ожидания ответа записи в журнал для востановления (WAL предзапись)  
+```  
+
+Создайте новый кластер с включенной контрольной суммой страниц. Создайте таблицу. Вставьте несколько значений. 
+Выключите кластер. Измените пару байт в таблице. Включите кластер и сделайте выборку из таблицы. 
+Что и почему произошло? как проигнорировать ошибку и продолжить работу?
+``` text
+postgres=# show data_checksums;
+ data_checksums 
+----------------
+ on
+
+postgres=# create table if not exists test(i int); 
+CREATE TABLE
+postgres=# insert into test(i) values (1); 
+INSERT 0 1
+postgres=# insert into test(i) values (2); 
+INSERT 0 1
+
+postgres=# SELECT 'test'::regclass::oid;
+  oid  
+-------
+ 16394
+(1 row)
+
 user@postgres2:~$ pg_lsclusters
 Ver Cluster Port Status Owner    Data directory              Log file
-15  main    5432 online postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
+15  main    5432 down   postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
+
+
+postgres=# select * from test;
+WARNING:  page verification failed, calculated checksum 44320 but expected 54492
+ERROR:  invalid page in block 0 of relation base/5/16394
+
+
+Произошла ошибка верификации страницы, т.е данные были изменены после сброса на диск. 
+Контрольная сумма вычисляется и записывается на страницу, 
+в моменте когда страница записывается из буферного кеша в страничный кеш операционной системы.
+
+
+Поиск поврежденого объекта:
+SELECT pg_database.oid, pg_class.relfilenode, pg_namespace.nspname as schema_name, pg_class.relname, pg_class.relkind 
+  from pg_class
+  JOIN pg_namespace on pg_class.relnamespace = pg_namespace.oid
+  WHERE pg_class.relfilenode = 16394
+ ORDER BY pg_class.relfilenode ASC;
+
+ relfilenode | schema_name | relname | relkind 
+-------------+-------------+---------+---------
+       16394 | public      | test    | r
+(1 row)
+
+
+чтобы проигнорировать ошибку, можно включить:
+
+1) ignore_checksum_failure = on
+
+после этого выдается результат с предупреждением (результат запроса может быть неправильным)
+postgres=# select * from test;
+WARNING:  page verification failed, calculated checksum 44320 but expected 54492
+ i 
+---
+ 1
+ 2
+(2 rows)
+
+2) zero_damaged_pages = on
+запрос ничего не выдал, так как поврежденная страница была очищена
+
 ```  
-Создать БД для тестов: выполнить pgbench -i бд
-``` text
-user@postgres2:~$ sudo -u postgres pgbench -i benchmark
-dropping old tables...
-NOTICE:  table "pgbench_accounts" does not exist, skipping
-NOTICE:  table "pgbench_branches" does not exist, skipping
-NOTICE:  table "pgbench_history" does not exist, skipping
-NOTICE:  table "pgbench_tellers" does not exist, skipping
-creating tables...
-generating data (client-side)...
-100000 of 100000 tuples (100%) done (elapsed 0.05 s, remaining 0.00 s)
-vacuuming...
-creating primary keys...
-done in 0.28 s (drop tables 0.00 s, create tables 0.03 s, client-side generate 0.09 s, vacuum 0.05 s, primary keys 0.11 s).
-```  
-Запустить pgbench -c8 -P 6 -T 60 -U postgres бд
-``` text
-user@postgres2:~$ sudo -u postgres pgbench -c8 -P 6 -T 60 benchmark
-pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
-starting vacuum...end.
-progress: 6.0 s, 129.2 tps, lat 61.096 ms stddev 36.098, 0 failed
-progress: 12.0 s, 130.0 tps, lat 61.697 ms stddev 34.918, 0 failed
-progress: 18.0 s, 136.0 tps, lat 58.792 ms stddev 32.902, 0 failed
-progress: 24.0 s, 135.0 tps, lat 58.968 ms stddev 32.998, 0 failed
-progress: 30.0 s, 138.0 tps, lat 58.049 ms stddev 32.361, 0 failed
-progress: 36.0 s, 137.7 tps, lat 57.909 ms stddev 32.763, 0 failed
-progress: 42.0 s, 138.8 tps, lat 57.779 ms stddev 30.474, 0 failed
-progress: 48.0 s, 138.8 tps, lat 57.555 ms stddev 31.974, 0 failed
-progress: 54.0 s, 135.5 tps, lat 58.904 ms stddev 36.417, 0 failed
-progress: 60.0 s, 137.7 tps, lat 58.061 ms stddev 32.171, 0 failed
-transaction type: <builtin: TPC-B (sort of)>
-scaling factor: 1
-query mode: simple
-number of clients: 8
-number of threads: 1
-maximum number of tries: 1
-duration: 60 s
-number of transactions actually processed: 8148
-number of failed transactions: 0 (0.000%)
-latency average = 58.861 ms
-latency stddev = 33.345 ms
-initial connection time = 17.046 ms
-tps = 135.676582 (without initial connection time)
-```  
-
-Применить параметры настройки PostgreSQL из прикрепленного к материалам занятия файла  
-Протестировать заново  
-Что изменилось и почему?  
-``` text
-user@postgres2:~$ sudo -u postgres pgbench -c8 -P 6 -T 60 benchmark
-pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
-starting vacuum...end.
-progress: 6.0 s, 135.5 tps, lat 58.350 ms stddev 31.442, 0 failed
-progress: 12.0 s, 132.2 tps, lat 60.430 ms stddev 34.245, 0 failed
-progress: 18.0 s, 132.3 tps, lat 60.560 ms stddev 30.938, 0 failed
-progress: 24.0 s, 133.5 tps, lat 59.613 ms stddev 31.655, 0 failed
-progress: 30.0 s, 139.2 tps, lat 57.586 ms stddev 33.486, 0 failed
-progress: 36.0 s, 136.6 tps, lat 58.551 ms stddev 33.375, 0 failed
-progress: 42.0 s, 135.7 tps, lat 58.826 ms stddev 30.956, 0 failed
-progress: 48.0 s, 138.4 tps, lat 57.797 ms stddev 30.578, 0 failed
-progress: 54.0 s, 138.2 tps, lat 57.697 ms stddev 33.510, 0 failed
-progress: 60.0 s, 137.6 tps, lat 58.050 ms stddev 33.051, 0 failed
-transaction type: <builtin: TPC-B (sort of)>
-scaling factor: 1
-query mode: simple
-number of clients: 8
-number of threads: 1
-maximum number of tries: 1
-duration: 60 s
-number of transactions actually processed: 8162
-number of failed transactions: 0 (0.000%)
-latency average = 58.748 ms
-latency stddev = 32.378 ms
-initial connection time = 23.837 ms
-tps = 135.956785 (without initial connection time)
-
-не увидел разницы (
-```  
-
-Создать таблицу с текстовым полем и заполнить случайными или сгенерированными данным в размере 1млн строк
-Посмотреть размер файла с таблицей
-``` text
-postgres=# \dt
-          List of relations
- Schema |  Name   | Type  |  Owner   
---------+---------+-------+----------
- public | student | table | postgres
-(1 row)
-
-postgres=# select count(*) from student;
-  count  
----------
- 1000000
-(1 row)
-
-    postgres=# SELECT pg_size_pretty(pg_TABLE_size('student'));
- pg_size_pretty 
-----------------
- 135 MB
-(1 row)
-```  
-5 раз обновить все строчки и добавить к каждой строчке любой символ
-Посмотреть количество мертвых строчек в таблице и когда последний раз приходил автовакуум
-Подождать некоторое время, проверяя, пришел ли автовакуум
-``` text
- relname | n_live_tup | n_dead_tup | ratio% |       last_autovacuum        
----------+------------+------------+--------+------------------------------
- student |    1000000 |    1000000 |     99 | 2024-01-17 09:32:24.64025+00
-(1 row)
-
- relname | n_live_tup | n_dead_tup | ratio% |        last_autovacuum        
----------+------------+------------+--------+-------------------------------
- student |    1000000 |          0 |      0 | 2024-01-17 09:33:24.438468+00
-(1 row)
-```  
-
-5 раз обновить все строчки и добавить к каждой строчке любой символ
-Посмотреть размер файла с таблицей
-``` text
-postgres=# SELECT pg_size_pretty(pg_TABLE_size('student'));
- pg_size_pretty 
-----------------
- 943 MB
-(1 row)
-```  
-10 раз обновить все строчки и добавить к каждой строчке любой символ
-Посмотреть размер файла с таблицей
-Объясните полученный результат
-``` text
-postgres=# CREATE TABLE student(
-  id serial,
-  fio char(100)
-) WITH (autovacuum_enabled = off);
-CREATE TABLE
-
-postgres=# CREATE INDEX idx_fio ON student(fio);
-CREATE INDEX
-
-postgres=# INSERT INTO student(fio) SELECT 'noname' FROM generate_series(1,1000000);
-INSERT 0 1000000
-
-postgres=# SELECT pg_size_pretty(pg_TABLE_size('student'));
- pg_size_pretty 
-----------------
- 135 MB
-(1 row)
-
-Обновляем записи в таблице student
-и проверяем размер файла с таблицей
-
-postgres=# update student set fio = 'name';
-UPDATE 1000000
-postgres=# update student set fio = 'name';
-UPDATE 1000000
-postgres=# update student set fio = 'name';
-UPDATE 1000000
-postgres=# update student set fio = 'name';
-UPDATE 1000000
-postgres=# update student set fio = 'name';
-UPDATE 1000000
-postgres=# SELECT pg_size_pretty(pg_TABLE_size('student'));
- pg_size_pretty 
-----------------
- 808 MB
-(1 row)
-
-postgres=# update student set fio = 'name1';
-UPDATE 1000000
-postgres=# SELECT pg_size_pretty(pg_TABLE_size('student'));
- pg_size_pretty 
-----------------
- 943 MB
-(1 row)
-
-
-Опреция update состоит из delete и insert, при этом удаленные записи (касается и просто опреации delete) физически не удаляются, 
-а помечаются как неактивные. Каждая строка имеет скрытые заголовки, 
-и для update записи: 
-xmax – идентификатор транзакции, удалившей запись;
-ctid – ссылка на следующую, более новую, версию той же строки.
-
-чтобы файл с таблицей не "разбухал", необходимо применять оперции vacuum/autovacuum.
-если применять просто vacuum вручную - то остаются пропуски, бывает полезно для последующих вставок
-НО autovacuum - вообще не рекомендуется отключать!!   
-```  
-
