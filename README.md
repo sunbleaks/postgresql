@@ -1,272 +1,166 @@
-Настройте сервер так, чтобы в журнал сообщений сбрасывалась информация о блокировках,   
-удерживаемых более 200 миллисекунд. Воспроизведите ситуацию, при которой в журнале   
-появятся такие сообщения.  
+развернуть виртуальную машину любым удобным способом  
+поставить на неё PostgreSQL 15 любым способом 
 ``` text
-Переводим log_lock_waits в on
-Выставлем deadlock_timeout время ожидания блокировки пережд фиксацией в журнал  
+user@postgres2:~$ sudo -u postgres pg_createcluster 15 main
+Creating new PostgreSQL cluster 15/main ...
+/usr/lib/postgresql/15/bin/initdb -D /var/lib/postgresql/15/main --auth-local peer --auth-host scram-sha-256 --no-instructions
+The files belonging to this database system will be owned by user "postgres".
+This user must also own the server process.
 
-locks=# show log_lock_waits;
- log_lock_waits 
-----------------
- on
+The database cluster will be initialized with locale "C.UTF-8".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
 
-locks=# show deadlock_timeout;
- deadlock_timeout 
---------------
- 200ms 
- 
-В первом и втором сеансах, открываем транзакцию и пытаемся проапдейтить 
-одну и ту же запись
+Data page checksums are disabled.
 
-UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 1;
+fixing permissions on existing directory /var/lib/postgresql/15/main ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default max_connections ... 100
+selecting default shared_buffers ... 128MB
+selecting default time zone ... Etc/UTC
+creating configuration files ... ok
+running bootstrap script ... ok
+performing post-bootstrap initialization ... ok
+syncing data to disk ... ok
+Warning: systemd does not know about the new cluster yet. Operations like "service postgresql start" will not handle it. To fix, run:
+  sudo systemctl daemon-reload
+Ver Cluster Port Status Owner    Data directory              Log file
+15  main    5432 down   postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
 
-смотрим лог в /var/log/postgresql/postgresql-15-main.log 
 
-2024-01-20 07:50:17.497 UTC [9394] postgres@locks LOG:  process 9394 still waiting for ShareLock on transaction 3776374 after 200.334 ms
-2024-01-20 07:50:17.497 UTC [9394] postgres@locks DETAIL:  Process holding the lock: 9305. Wait queue: 9394.
-2024-01-20 07:50:17.497 UTC [9394] postgres@locks CONTEXT:  while updating tuple (0,4) in relation "accounts"
-2024-01-20 07:50:17.497 UTC [9394] postgres@locks STATEMENT:  UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 1;
+user@postgres2:~$ sudo pg_ctlcluster 15 main start
+user@postgres2:~$ pg_lsclusters
+Ver Cluster Port Status Owner    Data directory              Log file
+15  main    5432 online postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
+```
+настроить кластер PostgreSQL 15 на максимальную производительность не обращая внимание на возможные   
+проблемы с надежностью в случае аварийной перезагрузки виртуальной машины
+``` text
+Для начала запустим тест с дефолтными настройками
+
+user@postgres2:~$ sudo -u postgres pgbench -i benchmark;
+dropping old tables...
+NOTICE:  table "pgbench_accounts" does not exist, skipping
+NOTICE:  table "pgbench_branches" does not exist, skipping
+NOTICE:  table "pgbench_history" does not exist, skipping
+NOTICE:  table "pgbench_tellers" does not exist, skipping
+creating tables...
+generating data (client-side)...
+100000 of 100000 tuples (100%) done (elapsed 0.04 s, remaining 0.00 s)
+vacuuming...
+creating primary keys...
+done in 0.37 s (drop tables 0.00 s, create tables 0.04 s, client-side generate 0.17 s, vacuum 0.06 s, primary keys 0.09 s).
+
+
+
+user@postgres2:~$ sudo -u postgres pgbench -c 50 -j 2 -P 10 -T 60 benchmark
+pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
+starting vacuum...end.
+progress: 10.0 s, 133.7 tps, lat 359.350 ms stddev 345.143, 0 failed
+progress: 20.0 s, 137.4 tps, lat 362.557 ms stddev 428.098, 0 failed
+progress: 30.0 s, 137.9 tps, lat 365.456 ms stddev 414.613, 0 failed
+progress: 40.0 s, 135.4 tps, lat 364.453 ms stddev 429.457, 0 failed
+progress: 50.0 s, 136.1 tps, lat 374.392 ms stddev 382.608, 0 failed
+progress: 60.0 s, 135.0 tps, lat 367.478 ms stddev 325.918, 0 failed
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 50
+number of threads: 2
+maximum number of tries: 1
+duration: 60 s
+number of transactions actually processed: 8205
+number of failed transactions: 0 (0.000%)
+latency average = 366.803 ms
+latency stddev = 389.977 ms
+initial connection time = 38.332 ms
+tps = 135.788205 (without initial connection time)
 ```
 
-Смоделируйте ситуацию обновления одной и той же строки тремя командами UPDATE в разных сеансах. 
-Изучите возникшие блокировки в представлении pg_locks и убедитесь, что все они понятны. 
-Пришлите список блокировок и объясните, что значит каждая.
+нагрузить кластер через утилиту через утилиту pgbench
 ``` text
+вот что предложил PGTune
+# DB Version: 15
+# OS Type: linux
+# DB Type: web
+# Total Memory (RAM): 4 GB
+# CPUs num: 2
+# Connections num: 200
+# Data Storage: ssd
 
-1-й сеанс
+max_connections = 200
+shared_buffers = 1GB
+effective_cache_size = 3GB
+maintenance_work_mem = 256MB
+checkpoint_completion_target = 0.9
+wal_buffers = 16MB
+default_statistics_target = 100
+random_page_cost = 1.1
+effective_io_concurrency = 200
+work_mem = 2621kB
+huge_pages = off
+min_wal_size = 1GB
+max_wal_size = 4GB
 
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776386 |           9305
-(1 row)
+Результат по tps оказался почти таким же
 
-locks=*# UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 1;
-UPDATE 1
-locks=*# SELECT * FROM locks_v WHERE pid = 9305;
- pid  |   locktype    |  lockid  |       mode       | granted 
-------+---------------+----------+------------------+---------
- 9305 | relation      | accounts | RowExclusiveLock | t
- 9305 | transactionid | 3776386  | ExclusiveLock    | t
-(2 rows)
-
-Транзакция всегда удерживает исключительную (ExclusiveLock) блокировку собственного номера,
-а так же видим RowExclusiveLock и удерживается блокировка таблицы
-
-
-
-
-2-й сеанс
-
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776387 |           9394
-(1 row)
-
-locks=*# UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 1;
-
-подвисли..
-
-locks=# SELECT * FROM locks_v where pid = 9394; 
- pid  |   locktype    |   lockid    |       mode       | granted 
-------+---------------+-------------+------------------+---------
- 9394 | relation      | accounts    | RowExclusiveLock | t
- 9394 | tuple         | accounts:11 | ExclusiveLock    | t
- 9394 | transactionid | 3776387     | ExclusiveLock    | t
- 9394 | transactionid | 3776386     | ShareLock        | f
-(4 rows)
-
-как и в первом сеансе: 
-Транзакция всегда удерживает исключительную (ExclusiveLock) блокировку собственного номера,
-а так же видим RowExclusiveLock и удерживается блокировка таблицы
-
-+ 2 новые блокировки
-9394 | tuple         | accounts:11 | ExclusiveLock    | t    - блокировка версии строки
-9394 | transactionid | 3776386     | ShareLock        | f    - в ожидании заершения 3776386 
+user@postgres2:~$ sudo -u postgres pgbench -c 50 -j 2 -P 10 -T 60 benchmark
+pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
+starting vacuum...end.
+progress: 10.0 s, 125.4 tps, lat 373.911 ms stddev 378.597, 0 failed
+progress: 20.0 s, 134.1 tps, lat 382.873 ms stddev 416.664, 0 failed
+progress: 30.0 s, 134.4 tps, lat 369.294 ms stddev 435.749, 0 failed
+progress: 40.0 s, 139.4 tps, lat 356.195 ms stddev 333.847, 0 failed
+progress: 50.0 s, 137.6 tps, lat 368.283 ms stddev 368.109, 0 failed
+progress: 60.0 s, 138.2 tps, lat 355.055 ms stddev 335.846, 0 failed
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 50
+number of threads: 2
+maximum number of tries: 1
+duration: 60 s
+number of transactions actually processed: 8141
+number of failed transactions: 0 (0.000%)
+latency average = 369.561 ms
+latency stddev = 384.416 ms
+initial connection time = 42.090 ms
+tps = 134.794235 (without initial connection time)
 
 
+убираем предзапись в журнал (WAL)
+alter system set synchronous_commit = 'off';
+select pg_reload_conf();
 
 
-3-й сеанс
+user@postgres2:~$ sudo -u postgres pgbench -c 50 -j 2 -P 10 -T 60 benchmark
+pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
+starting vacuum...end.
+progress: 10.0 s, 3636.6 tps, lat 13.628 ms stddev 12.162, 0 failed
+progress: 20.0 s, 3583.1 tps, lat 13.917 ms stddev 12.465, 0 failed
+progress: 30.0 s, 3610.5 tps, lat 13.813 ms stddev 12.132, 0 failed
+progress: 40.0 s, 3623.6 tps, lat 13.757 ms stddev 12.522, 0 failed
+progress: 50.0 s, 3576.1 tps, lat 13.936 ms stddev 12.305, 0 failed
+progress: 60.0 s, 3543.3 tps, lat 14.066 ms stddev 13.005, 0 failed
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 50
+number of threads: 2
+maximum number of tries: 1
+duration: 60 s
+number of transactions actually processed: 215789
+number of failed transactions: 0 (0.000%)
+latency average = 13.861 ms
+latency stddev = 12.454 ms
+initial connection time = 45.941 ms
+tps = 3594.154321 (without initial connection time)
+```
 
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776388 |           9388
-(1 row)
-
-locks=*# UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 1;
-
-подвисли..
-
-locks=*# SELECT * FROM locks_v where pid = 9388;
- pid  |   locktype    |   lockid    |       mode       | granted 
-------+---------------+-------------+------------------+---------
- 9388 | relation      | accounts    | RowExclusiveLock | t
- 9388 | transactionid | 3776388     | ExclusiveLock    | t
- 9388 | tuple         | accounts:11 | ExclusiveLock    | f    - в ожидании завершения предыдущей блокировки строки
-(3 rows)
-
-
-Образовалась очередь блокировок.
-
-
-2024-01-20 09:16:33.591 UTC [9394] postgres@locks LOG:  process 9394 still waiting for ShareLock on transaction 3776386 after 200.114 ms
-2024-01-20 09:16:33.591 UTC [9394] postgres@locks DETAIL:  Process holding the lock: 9305. Wait queue: 9394.
-2024-01-20 09:16:33.591 UTC [9394] postgres@locks CONTEXT:  while updating tuple (0,11) in relation "accounts"
-2024-01-20 09:16:33.591 UTC [9394] postgres@locks STATEMENT:  UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 1;
-2024-01-20 09:28:06.225 UTC [9388] postgres@locks LOG:  process 9388 still waiting for ExclusiveLock on tuple (0,11) of relation 18553 of database 18552 after 200.284 ms
-2024-01-20 09:28:06.225 UTC [9388] postgres@locks DETAIL:  Process holding the lock: 9394. Wait queue: 9388.
-2024-01-20 09:28:06.225 UTC [9388] postgres@locks STATEMENT:  UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 1;
-
-
-9394 ожидает завершения 9305
-9388 ожидает завершения 9394
-
-locks=*# SELECT locktype, relation::REGCLASS, mode, granted, pid, pg_blocking_pids(pid) AS wait_for
-FROM pg_locks WHERE relation = 'accounts'::regclass order by pid;
- locktype | relation |       mode       | granted | pid  | wait_for 
-----------+----------+------------------+---------+------+----------
- relation | accounts | RowExclusiveLock | t       | 9305 | {}
- relation | accounts | RowExclusiveLock | t       | 9388 | {9394}
- tuple    | accounts | ExclusiveLock    | f       | 9388 | {9394}
- relation | accounts | RowExclusiveLock | t       | 9394 | {9305}
- tuple    | accounts | ExclusiveLock    | t       | 9394 | {9305}
-(5 rows)
-```  
-
-Воспроизведите взаимоблокировку трех транзакций. Можно ли разобраться в ситуации постфактум, изучая журнал сообщений?
+написать какого значения tps удалось достичь, показать какие параметры в какие значения устанавливали и почему
 ``` text
-
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776392 |           9305
-(1 row)
-
-locks=# BEGIN;                                                       
-UPDATE accounts SET amount = amount - 200.00 WHERE acc_no = 1;
-BEGIN
-UPDATE 1
-locks=*# BEGIN;
-UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 2;
-WARNING:  there is already a transaction in progress
-BEGIN
-
-
-
-
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776393 |           9394
-(1 row)
-  
-locks=# BEGIN;                                                       
-UPDATE accounts SET amount = amount - 20.00 WHERE acc_no = 2;
-BEGIN
-UPDATE 1
-locks=*# BEGIN;
-UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 3;
-WARNING:  there is already a transaction in progress
-BEGIN
-UPDATE 1
-locks=*# 
-
-
-
-
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776394 |           9388
-(1 row)
-locks=*# UPDATE accounts SET amount = amount - 20.00 WHERE acc_no = 3;
-UPDATE 1
-locks=*# UPDATE accounts SET amount = amount + 10.00 WHERE acc_no = 2;
-ERROR:  deadlock detected
-DETAIL:  Process 9388 waits for ExclusiveLock on tuple (0,39) of relation 18553 of database 18552; blocked by process 9305.
-Process 9305 waits for ShareLock on transaction 3776398; blocked by process 9394.
-Process 9394 waits for ShareLock on transaction 3776399; blocked by process 9388.
-HINT:  See server log for query details.
-locks=!# 
-
-
-в журнале можно понять, кто кого заблокировал
-так же фиксируется фраза deadlock detected
-
-2024-01-20 10:49:12.612 UTC [9388] postgres@locks DETAIL:  Process holding the lock: 9305. Wait queue: .
-2024-01-20 10:49:12.612 UTC [9388] postgres@locks STATEMENT:  UPDATE accounts SET amount = amount + 10.00 WHERE acc_no = 2;
-2024-01-20 10:49:12.612 UTC [9388] postgres@locks ERROR:  deadlock detected
-2024-01-20 10:49:12.612 UTC [9388] postgres@locks DETAIL:  Process 9388 waits for ExclusiveLock on tuple (0,39) of relation 18553 of database 18552; blocked by process 9305.
-        Process 9305 waits for ShareLock on transaction 3776398; blocked by process 9394.
-        Process 9394 waits for ShareLock on transaction 3776399; blocked by process 9388.
-        Process 9388: UPDATE accounts SET amount = amount + 10.00 WHERE acc_no = 2;
-        Process 9305: UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 2;
-        Process 9394: UPDATE accounts SET amount = amount + 100.00 WHERE acc_no = 3;
-
-```  
-
-Могут ли две транзакции, выполняющие единственную команду UPDATE одной и той же таблицы (без where), заблокировать друг друга?
-``` text
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776400 |           9388
-(1 row)
-
-locks=*# UPDATE accounts SET amount = amount + 10.00;
-UPDATE 3
-locks=*# 
-
-
-
-locks=# BEGIN;
-BEGIN
-locks=*# SELECT txid_current(), pg_backend_pid();
- txid_current | pg_backend_pid 
---------------+----------------
-      3776401 |           9394
-(1 row)
-
-locks=*# UPDATE accounts SET amount = amount + 10.00;
-
-Подвисло..
-
-
-
-2024-01-20 11:03:13.604 UTC [9388] postgres@locks LOG:  process 9388 still waiting for ShareLock on transaction 3776401 after 200.246 ms
-2024-01-20 11:03:13.604 UTC [9388] postgres@locks DETAIL:  Process holding the lock: 9394. Wait queue: 9388.
-2024-01-20 11:03:13.604 UTC [9388] postgres@locks CONTEXT:  while updating tuple (0,37) in relation "accounts"
-2024-01-20 11:03:13.604 UTC [9388] postgres@locks STATEMENT:  UPDATE accounts SET amount = amount + 10.00;
-
-locks=# SELECT locktype, relation::REGCLASS, mode, granted, pid, pg_blocking_pids(pid) AS wait_for
-FROM pg_locks WHERE relation = 'accounts'::regclass order by pid;
- locktype | relation |       mode       | granted | pid  | wait_for 
-----------+----------+------------------+---------+------+----------
- relation | accounts | RowExclusiveLock | t       | 9388 | {9394}
- tuple    | accounts | ExclusiveLock    | t       | 9388 | {9394}
- relation | accounts | RowExclusiveLock | t       | 9394 | {}
-(3 rows)
-
-
-
-Транзакции становятся в очередь.  
-Друг друга не блокируют, транзакция 9394 блокирует 9388
-
-``` 
+Отключение предзаписи в журнал (асинхронный режим)
+помогло увеличить выполнение операций в ~ 26 раз. 
+Все показатели намного лучше.
+```
