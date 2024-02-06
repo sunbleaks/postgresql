@@ -1,166 +1,109 @@
-развернуть виртуальную машину любым удобным способом  
-поставить на неё PostgreSQL 15 любым способом 
+1. <b>Создаем ВМ/докер c ПГ.</b>
+
+    В VirtualBox установлены Ubuntu 22.04.3 LTS и кластер postgresql 15  
 ``` text
-user@postgres2:~$ sudo -u postgres pg_createcluster 15 main
-Creating new PostgreSQL cluster 15/main ...
-/usr/lib/postgresql/15/bin/initdb -D /var/lib/postgresql/15/main --auth-local peer --auth-host scram-sha-256 --no-instructions
-The files belonging to this database system will be owned by user "postgres".
-This user must also own the server process.
-
-The database cluster will be initialized with locale "C.UTF-8".
-The default database encoding has accordingly been set to "UTF8".
-The default text search configuration will be set to "english".
-
-Data page checksums are disabled.
-
-fixing permissions on existing directory /var/lib/postgresql/15/main ... ok
-creating subdirectories ... ok
-selecting dynamic shared memory implementation ... posix
-selecting default max_connections ... 100
-selecting default shared_buffers ... 128MB
-selecting default time zone ... Etc/UTC
-creating configuration files ... ok
-running bootstrap script ... ok
-performing post-bootstrap initialization ... ok
-syncing data to disk ... ok
-Warning: systemd does not know about the new cluster yet. Operations like "service postgresql start" will not handle it. To fix, run:
-  sudo systemctl daemon-reload
-Ver Cluster Port Status Owner    Data directory              Log file
-15  main    5432 down   postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
+user@postgres2:~$ cat /etc/os-release
+PRETTY_NAME="Ubuntu 22.04.3 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.3 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
 
 
-user@postgres2:~$ sudo pg_ctlcluster 15 main start
 user@postgres2:~$ pg_lsclusters
 Ver Cluster Port Status Owner    Data directory              Log file
 15  main    5432 online postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
-```
-настроить кластер PostgreSQL 15 на максимальную производительность не обращая внимание на возможные   
-проблемы с надежностью в случае аварийной перезагрузки виртуальной машины
+user@postgres2:~$ 
+```  
+
+2. <b>Создаем БД, схему и в ней таблицу.</b> (БД - otus, схема - scm)  
+![Снимок экрана от 2024-02-06 13-20-05](https://github.com/sunbleaks/postgresql/assets/144436024/1c67ae13-5292-4a4a-a283-f688fe5615fe)
+
+3. <b>Заполняем таблицы автосгенерированными 100 записями.</b> (таблицы - students и films)  
+![Снимок экрана от 2024-02-06 13-20-38](https://github.com/sunbleaks/postgresql/assets/144436024/32cefc91-9a72-4651-a4f9-30850c5ec29c)
+
+4. <b>Под линукс пользователем Postgres создадим каталог для бэкапов</b> (/tmp/backup)  
+![Снимок экрана от 2024-02-06 14-16-00](https://github.com/sunbleaks/postgresql/assets/144436024/4d930bcd-1c3f-4c2d-a359-2ad0da9e251b)
+
+5. <b>Сделаем логический бэкап используя утилиту COPY</b>
 ``` text
-Для начала запустим тест с дефолтными настройками
+user@postgres2:~$ sudo -u postgres psql
+psql (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
+Type "help" for help.
 
-user@postgres2:~$ sudo -u postgres pgbench -i benchmark;
-dropping old tables...
-NOTICE:  table "pgbench_accounts" does not exist, skipping
-NOTICE:  table "pgbench_branches" does not exist, skipping
-NOTICE:  table "pgbench_history" does not exist, skipping
-NOTICE:  table "pgbench_tellers" does not exist, skipping
-creating tables...
-generating data (client-side)...
-100000 of 100000 tuples (100%) done (elapsed 0.04 s, remaining 0.00 s)
-vacuuming...
-creating primary keys...
-done in 0.37 s (drop tables 0.00 s, create tables 0.04 s, client-side generate 0.17 s, vacuum 0.06 s, primary keys 0.09 s).
+postgres=# \c otus
+You are now connected to database "otus" as user "postgres".
+otus=# \copy scm.students to '/tmp/backup/backup_scm.students.sql';
+COPY 100
+otus=# \copy scm.films to '/tmp/backup/backup_scm.films.sql';
+COPY 100
+otus=# 
+```  
+Проверяем содержимое каталога:   
+![Снимок экрана от 2024-02-06 14-32-48](https://github.com/sunbleaks/postgresql/assets/144436024/43555038-58f4-4af2-aebd-5039482469d9)
 
-
-
-user@postgres2:~$ sudo -u postgres pgbench -c 50 -j 2 -P 10 -T 60 benchmark
-pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
-starting vacuum...end.
-progress: 10.0 s, 133.7 tps, lat 359.350 ms stddev 345.143, 0 failed
-progress: 20.0 s, 137.4 tps, lat 362.557 ms stddev 428.098, 0 failed
-progress: 30.0 s, 137.9 tps, lat 365.456 ms stddev 414.613, 0 failed
-progress: 40.0 s, 135.4 tps, lat 364.453 ms stddev 429.457, 0 failed
-progress: 50.0 s, 136.1 tps, lat 374.392 ms stddev 382.608, 0 failed
-progress: 60.0 s, 135.0 tps, lat 367.478 ms stddev 325.918, 0 failed
-transaction type: <builtin: TPC-B (sort of)>
-scaling factor: 1
-query mode: simple
-number of clients: 50
-number of threads: 2
-maximum number of tries: 1
-duration: 60 s
-number of transactions actually processed: 8205
-number of failed transactions: 0 (0.000%)
-latency average = 366.803 ms
-latency stddev = 389.977 ms
-initial connection time = 38.332 ms
-tps = 135.788205 (without initial connection time)
-```
-
-нагрузить кластер через утилиту через утилиту pgbench
+6. <b>Восстановим в 2 таблицы данные из бэкапа.</b>
 ``` text
-вот что предложил PGTune
-# DB Version: 15
-# OS Type: linux
-# DB Type: web
-# Total Memory (RAM): 4 GB
-# CPUs num: 2
-# Connections num: 200
-# Data Storage: ssd
-
-max_connections = 200
-shared_buffers = 1GB
-effective_cache_size = 3GB
-maintenance_work_mem = 256MB
-checkpoint_completion_target = 0.9
-wal_buffers = 16MB
-default_statistics_target = 100
-random_page_cost = 1.1
-effective_io_concurrency = 200
-work_mem = 2621kB
-huge_pages = off
-min_wal_size = 1GB
-max_wal_size = 4GB
-
-Результат по tps оказался почти таким же
-
-user@postgres2:~$ sudo -u postgres pgbench -c 50 -j 2 -P 10 -T 60 benchmark
-pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
-starting vacuum...end.
-progress: 10.0 s, 125.4 tps, lat 373.911 ms stddev 378.597, 0 failed
-progress: 20.0 s, 134.1 tps, lat 382.873 ms stddev 416.664, 0 failed
-progress: 30.0 s, 134.4 tps, lat 369.294 ms stddev 435.749, 0 failed
-progress: 40.0 s, 139.4 tps, lat 356.195 ms stddev 333.847, 0 failed
-progress: 50.0 s, 137.6 tps, lat 368.283 ms stddev 368.109, 0 failed
-progress: 60.0 s, 138.2 tps, lat 355.055 ms stddev 335.846, 0 failed
-transaction type: <builtin: TPC-B (sort of)>
-scaling factor: 1
-query mode: simple
-number of clients: 50
-number of threads: 2
-maximum number of tries: 1
-duration: 60 s
-number of transactions actually processed: 8141
-number of failed transactions: 0 (0.000%)
-latency average = 369.561 ms
-latency stddev = 384.416 ms
-initial connection time = 42.090 ms
-tps = 134.794235 (without initial connection time)
+Удалим записи
+postgres=# \c otus;
+You are now connected to database "otus" as user "postgres".
+otus=# delete from scm.students;
+DELETE 100
+otus=# delete from scm.films;
+DELETE 100
+```  
+Восстанавливаем:  
+![Снимок экрана от 2024-02-06 14-40-49](https://github.com/sunbleaks/postgresql/assets/144436024/2a3b9204-0cb3-4270-a4ae-15282d49377b)
 
 
-убираем предзапись в журнал (WAL)
-alter system set synchronous_commit = 'off';
-select pg_reload_conf();
-
-
-user@postgres2:~$ sudo -u postgres pgbench -c 50 -j 2 -P 10 -T 60 benchmark
-pgbench (15.5 (Ubuntu 15.5-1.pgdg22.04+1))
-starting vacuum...end.
-progress: 10.0 s, 3636.6 tps, lat 13.628 ms stddev 12.162, 0 failed
-progress: 20.0 s, 3583.1 tps, lat 13.917 ms stddev 12.465, 0 failed
-progress: 30.0 s, 3610.5 tps, lat 13.813 ms stddev 12.132, 0 failed
-progress: 40.0 s, 3623.6 tps, lat 13.757 ms stddev 12.522, 0 failed
-progress: 50.0 s, 3576.1 tps, lat 13.936 ms stddev 12.305, 0 failed
-progress: 60.0 s, 3543.3 tps, lat 14.066 ms stddev 13.005, 0 failed
-transaction type: <builtin: TPC-B (sort of)>
-scaling factor: 1
-query mode: simple
-number of clients: 50
-number of threads: 2
-maximum number of tries: 1
-duration: 60 s
-number of transactions actually processed: 215789
-number of failed transactions: 0 (0.000%)
-latency average = 13.861 ms
-latency stddev = 12.454 ms
-initial connection time = 45.941 ms
-tps = 3594.154321 (without initial connection time)
-```
-
-написать какого значения tps удалось достичь, показать какие параметры в какие значения устанавливали и почему
+7. <b>Используя утилиту pg_dump создаё бэкап в кастомном сжатом формате двух таблиц</b>
 ``` text
-Отключение предзаписи в журнал (асинхронный режим)
-помогло увеличить выполнение операций в ~ 26 раз. 
-Все показатели намного лучше.
-```
+Попытка выполнить pg_dump и ошибка доступа.
+Необходимо выполнять операцию по юзером, который имеет права для работы с директорие /tmp/backup
+  
+user@postgres2:~$ sudo -u postgres pg_dump -d otus --create -Fc | gzip > /tmp/backup/backup_otus.gz
+-bash: /tmp/backup/backup_otus.gz: Permission denied
+user@postgres2:~$ 
+
+Логинемся: 
+user@postgres2:~$ sudo su postgres
+postgres@postgres2:/home/user$ 
+
+Нет необходимости выполнять команду с sudo
+postgres@postgres2:/home/user$ pg_dump -d otus --create -Fc | gzip > /tmp/backup/backup_otus.gz
+postgres@postgres2:/home/user$ 
+``` 
+Проверяем:  
+![Снимок экрана от 2024-02-06 14-55-42](https://github.com/sunbleaks/postgresql/assets/144436024/259ab5f4-4575-46bb-922a-20a33abde491)
+
+8. <b>Используя утилиту pg_restore восстанавливаем в новую БД только вторую таблицу!</b>  
+Восстанавливаю только таблицу scm.films    
+Для начала распакуем архив в файл 
+![Снимок экрана от 2024-02-06 16-00-33](https://github.com/sunbleaks/postgresql/assets/144436024/fd78eee7-80ee-487d-a7e8-adfc8f9c71d5)  
+
+Без создания БД и схемы не получилось достать из бэкаба конкретную таблицу: 
+``` text
+Флаг -С (--reate) не помог
+
+user@postgres2:/tmp/backup$ sudo -u postgres pg_restore -v -C -d otus -n scm -t films /tmp/backup/backup_otus
+pg_restore: connecting to database for restore
+pg_restore: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  database "otus" does not exist
+``` 
+![Снимок экрана от 2024-02-06 16-21-09](https://github.com/sunbleaks/postgresql/assets/144436024/a2316fc0-487a-43e3-9188-e3b25f727cac)  
+
+``` text
+Когда созданны БД и схема, тогда успешно удается восстановить таблицу из бэкапа  
+``` 
+![Снимок экрана от 2024-02-06 16-24-28](https://github.com/sunbleaks/postgresql/assets/144436024/bb3f8150-9e43-4f86-aa46-2f23fa8dd953)
+
+
+
+
+
